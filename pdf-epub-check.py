@@ -12,24 +12,15 @@ import pypdf
 from streamlit_pdf_viewer import pdf_viewer
 
 # --- 1. 页面配置 ---
-st.set_page_config(
-    page_title="夷卓汇 - 智能文档转档平台", 
-    page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# --- 2. CSS 样式优化 ---
-st.markdown("""
 # --- 2. CSS 样式优化 ---
 st.markdown("""
 <style>
-    /* 1. 隐藏顶部工具栏（Deploy、Share 等） */
+    /* 1. 隐藏顶部工具栏 Deploy Share 等 */
     header[data-testid="stHeader"] {
         display: none !important;
     }
     
-    /* 2. 隐藏汉堡菜单（三条线图标） */
+    /* 2. 隐藏汉堡菜单三条线图标 */
     button[kind="header"] {
         display: none !important;
     }
@@ -41,7 +32,7 @@ st.markdown("""
         max-width: 100% !important;
     }
     
-    /* 4. 当侧边栏折叠时，主内容区域自动扩展 */
+    /* 4. 当侧边栏折叠时主内容区域自动扩展 */
     section[data-testid="stSidebar"][aria-expanded="false"] ~ .main .block-container {
         max-width: 100% !important;
         padding-left: 2rem !important;
@@ -210,7 +201,6 @@ st.markdown("""
         }
     }
 </style>
-""", unsafe_allow_html=True)
 """, unsafe_allow_html=True)
 
 # --- 3. 状态管理 ---
@@ -759,5 +749,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 
