@@ -1,3 +1,4 @@
 streamlit
 requests
 pypdf
+streamlit-pdf-viewer
