@@ -252,7 +252,8 @@ class CloudConverter:
             content = f.read()
         
         return content, extract_path
-        class FormatConverter:
+class FormatConverter:
+    # 确保类的定义与方法缩进是正确的
     @staticmethod
     def generate_epub(markdown_text, work_dir, output_filename="output.epub"):
         if not work_dir or not os.path.exists(work_dir):
@@ -529,3 +530,4 @@ if st.session_state.md_content:
         </p>
     </div>
     """, unsafe_allow_html=True)
+
