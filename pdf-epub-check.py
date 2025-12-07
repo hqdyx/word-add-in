@@ -446,11 +446,12 @@ if st.session_state.md_content:
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-elif not st.session_state.processing_done:
+else: 
     st.markdown("""
     <div style="text-align: center; padding: 60px 0; color: #95a5a6;">
         <div style="font-size: 60px; margin-bottom: 20px;">📂</div>
         <h3>请在左侧上传文件开始工作</h3>
     </div>
     """, unsafe_allow_html=True)
+
 
