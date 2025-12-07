@@ -723,8 +723,9 @@ st.markdown(
     """
     <div style="text-align: center; color: #999; font-size: 14px; padding: 20px 0;">
         <p>夷卓汇智能转档平台 v2.0 | 让文档转换更简单高效</p>
-        <p style="margin-top: 10px;">Powered by Doc2X API & Pandoc</p>
+        <p style="margin-top: 10px;">Powered by YZHAI</p>
     </div>
     """,
     unsafe_allow_html=True
 )
+
