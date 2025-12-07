@@ -21,15 +21,34 @@ st.set_page_config(
 
 # --- 2. CSS 样式优化 ---
 st.markdown("""
+# --- 2. CSS 样式优化 ---
+st.markdown("""
 <style>
-    /* 1. 压缩页面顶部空白 */
+    /* 1. 隐藏顶部工具栏（Deploy、Share 等） */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    
+    /* 2. 隐藏汉堡菜单（三条线图标） */
+    button[kind="header"] {
+        display: none !important;
+    }
+    
+    /* 3. 压缩页面顶部空白 */
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 1rem !important;
         max-width: 100% !important;
     }
     
-    /* 2. 侧边栏样式 */
+    /* 4. 当侧边栏折叠时，主内容区域自动扩展 */
+    section[data-testid="stSidebar"][aria-expanded="false"] ~ .main .block-container {
+        max-width: 100% !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
+    }
+    
+    /* 5. 侧边栏样式 */
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
         min-width: 300px !important;
@@ -42,13 +61,13 @@ st.markdown("""
         padding: 20px;
     }
     
-    /* 3. 全局字体与背景 */
+    /* 6. 全局字体与背景 */
     .stApp { 
         background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
         font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; 
     }
     
-    /* 4. 主标题样式 */
+    /* 7. 主标题样式 */
     .compact-title {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
@@ -61,7 +80,7 @@ st.markdown("""
         box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     
-    /* 5. 导出区域样式 */
+    /* 8. 导出区域样式 */
     .export-zone { 
         background: white; 
         padding: 25px; 
@@ -71,7 +90,7 @@ st.markdown("""
         box-shadow: 0 4px 20px rgba(0,0,0,0.08);
     }
     
-    /* 6. Tabs 样式优化 */
+    /* 9. Tabs 样式优化 */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background: #f8f9fa;
@@ -101,7 +120,7 @@ st.markdown("""
         font-weight: 700;
     }
     
-    /* 7. 侧边栏按钮样式 */
+    /* 10. 侧边栏按钮样式 */
     section[data-testid="stSidebar"] .stButton>button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
@@ -116,7 +135,7 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
     }
     
-    /* 8. 主内容按钮样式 */
+    /* 11. 主内容按钮样式 */
     .stButton>button {
         border-radius: 8px;
         font-weight: 600;
@@ -128,7 +147,7 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     
-    /* 9. 文件上传器样式 */
+    /* 12. 文件上传器样式 */
     .uploadedFile {
         background: #f0f2f6;
         border-radius: 10px;
@@ -137,7 +156,7 @@ st.markdown("""
         border: 1px solid #d0d0d0;
     }
     
-    /* 10. 信息框样式 */
+    /* 13. 信息框样式 */
     .stInfo {
         background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
         border-left: 5px solid #2196f3;
@@ -146,14 +165,14 @@ st.markdown("""
         font-weight: 500;
     }
     
-    /* 11. Metric 卡片样式 */
+    /* 14. Metric 卡片样式 */
     [data-testid="stMetricValue"] {
         font-size: 1.8rem;
         font-weight: 700;
         color: #667eea;
     }
     
-    /* 12. 文本区域样式 */
+    /* 15. 文本区域样式 */
     .stTextArea textarea {
         border-radius: 10px;
         border: 2px solid #e0e0e0;
@@ -165,7 +184,7 @@ st.markdown("""
         box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
     }
     
-    /* 13. 下载按钮特殊样式 */
+    /* 16. 下载按钮特殊样式 */
     .stDownloadButton>button {
         background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         color: white;
@@ -176,7 +195,7 @@ st.markdown("""
         background: linear-gradient(135deg, #0d7968 0%, #2dd15f 100%);
     }
     
-    /* 14. 分隔线样式 */
+    /* 17. 分隔线样式 */
     hr {
         margin: 2rem 0;
         border: none;
@@ -184,13 +203,14 @@ st.markdown("""
         background: linear-gradient(90deg, transparent, #667eea, transparent);
     }
     
-    /* 15. 响应式调整 */
+    /* 18. 响应式调整 */
     @media (max-width: 768px) {
         .compact-title {
             font-size: 1.5rem;
         }
     }
 </style>
+""", unsafe_allow_html=True)
 """, unsafe_allow_html=True)
 
 # --- 3. 状态管理 ---
@@ -365,14 +385,14 @@ class FormatConverter:
                 check=True
             )
             
-            # Pandoc 转换命令（优化版）
+            # Pandoc 转换命令（兼容旧版本）
             cmd = [
                 "pandoc", 
                 "temp_render.md",
                 "-o", output_filename,
                 "--toc",                              # 生成目录
                 "--standalone",                        # 独立文档
-                "--embed-resources",                   # 嵌入所有资源（包括图片）
+                "--self-contained",                    # 旧版本使用这个选项嵌入资源
                 "--resource-path=.",                   # 设置资源搜索路径
                 "--metadata", "title=转换文档",
                 "--metadata", "lang=zh-CN",           # 中文语言设置
@@ -413,15 +433,26 @@ class FormatConverter:
             f.write(markdown_text)
             
         try:
+            # 兼容旧版本的命令
             cmd = [
                 "pandoc", 
                 "temp_render.md", 
                 "-o", output_filename,
-                "--resource-path=.",
-                "--embed-resources",
+                "--resource-path=.",                   # 资源路径
+                "--standalone",                        # 独立文档
             ]
-            subprocess.run(cmd, cwd=work_dir, check=True, capture_output=True)
+            
+            result = subprocess.run(
+                cmd, 
+                cwd=work_dir, 
+                check=True, 
+                capture_output=True,
+                text=True
+            )
             return output_path
+        except subprocess.CalledProcessError as e:
+            st.error(f"❌ Word 生成失败 (退出码 {e.returncode}):\n```\n{e.stderr}\n```")
+            return None
         except Exception as e:
             st.error(f"❌ Word 生成失败: {str(e)}")
             return None
@@ -728,4 +759,5 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
