@@ -19,25 +19,40 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS 样式优化 (解决头部过大问题) ---
+# --- 2. CSS 样式优化 (修复侧边栏显示问题) ---
 st.markdown("""
 <style>
-    /* 1. 极度压缩页面顶部空白 */
+    /* 1. 压缩页面顶部空白，但保留 header 可见性 */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 2rem !important;
         padding-bottom: 1rem !important;
     }
-    header {visibility: hidden;} /* 隐藏 Streamlit 默认的汉堡菜单栏背景 */
+    
+    /* 确保侧边栏可见 */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+        min-width: 280px !important;
+    }
+    
+    section[data-testid="stSidebar"] > div:first-child {
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 15px;
+        margin: 15px;
+        padding: 20px;
+    }
     
     /* 2. 全局字体与背景 */
-    .stApp { background-color: #f8f9fa; font-family: 'Segoe UI', sans-serif; }
+    .stApp { 
+        background-color: #f8f9fa; 
+        font-family: 'Segoe UI', sans-serif; 
+    }
     
     /* 3. 自定义紧凑标题 */
     .compact-title {
         color: #2c3e50;
         font-size: 1.8rem;
         font-weight: 800;
-        margin-bottom: 0px;
+        margin-bottom: 5px;
         padding-bottom: 10px;
         border-bottom: 2px solid #e9ecef;
     }
@@ -45,10 +60,11 @@ st.markdown("""
     /* 4. 导出区域样式 */
     .export-zone { 
         background: white; 
-        padding: 15px; 
+        padding: 20px; 
         border-radius: 10px; 
         border: 1px solid #e0e0e0;
         margin-top: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     }
     
     /* 5. 调整 Tabs 样式 */
@@ -67,6 +83,36 @@ st.markdown("""
         border-color: #2196f3;
         font-weight: bold;
     }
+    
+    /* 6. 侧边栏内部样式优化 */
+    section[data-testid="stSidebar"] .stButton>button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-weight: 600;
+        border: none;
+        transition: all 0.3s;
+    }
+    
+    section[data-testid="stSidebar"] .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    
+    /* 7. 文件上传器样式 */
+    .uploadedFile {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 10px;
+        margin: 10px 0;
+    }
+    
+    /* 8. 优化信息框 */
+    .stInfo {
+        background-color: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        padding: 12px;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,7 +126,7 @@ if 'file_name' not in st.session_state:
 if 'page_count' not in st.session_state:
     st.session_state.page_count = 0
 if 'work_dir' not in st.session_state:
-    st.session_state.work_dir = None # 存储解压后的工作目录路径
+    st.session_state.work_dir = None
 
 # --- 4. 核心功能类 ---
 
@@ -121,7 +167,6 @@ class CloudConverter:
                 st.write("⬇️ 下载并解压...")
                 content, extract_path = self._download_and_extract(download_url, temp_file)
                 
-                # 保存工作目录到 session，这对后续生成 EPUB 至关重要（为了找图片）
                 st.session_state.work_dir = str(extract_path)
                 
                 status.update(label="✅ 转换完成！", state="complete", expanded=False)
@@ -133,7 +178,6 @@ class CloudConverter:
             st.error(f"❌ 转换中断: {str(e)}")
             return None
 
-    # ... (原有网络请求方法保持不变) ...
     def _preupload(self):
         res = requests.post(f"{self.base_url}/api/v2/parse/preupload", headers=self.headers)
         if res.status_code != 200: raise Exception("初始化失败")
@@ -142,7 +186,8 @@ class CloudConverter:
         return data["data"]["uid"], data["data"]["url"]
 
     def _upload_file(self, file_path, upload_url):
-        with open(file_path, "rb") as f: requests.put(upload_url, data=f)
+        with open(file_path, "rb") as f: 
+            requests.put(upload_url, data=f)
 
     def _wait_for_parsing(self, uid):
         progress_text = st.empty()
@@ -165,19 +210,21 @@ class CloudConverter:
             except Exception: continue
 
     def _trigger_export(self, uid):
-        requests.post(f"{self.base_url}/api/v2/convert/parse", headers=self.headers, json={"uid": uid, "to": "md", "formula_mode": "normal", "filename": "output"})
+        requests.post(f"{self.base_url}/api/v2/convert/parse", headers=self.headers, 
+                     json={"uid": uid, "to": "md", "formula_mode": "normal", "filename": "output"})
 
     def _wait_for_export_result(self, uid):
         while True:
             time.sleep(1)
             res = requests.get(f"{self.base_url}/api/v2/convert/parse/result", headers=self.headers, params={"uid": uid})
             data = res.json()
-            if data["code"] == "success" and data["data"]["status"] == "success": return data["data"]["url"]
-            elif data["data"]["status"] == "failed": raise Exception("导出失败")
+            if data["code"] == "success" and data["data"]["status"] == "success": 
+                return data["data"]["url"]
+            elif data["data"]["status"] == "failed": 
+                raise Exception("导出失败")
 
     def _download_and_extract(self, url, original_file):
         r = requests.get(url)
-        # 使用绝对路径，确保 Pandoc 能找到
         base_output_dir = Path("./output").resolve()
         extract_path = base_output_dir / original_file.stem
         
@@ -192,22 +239,18 @@ class CloudConverter:
         md_files = list(extract_path.glob("**/*.md"))
         if not md_files: raise Exception("未找到 MD 文件")
         
-        with open(md_files[0], "r", encoding="utf-8") as f: content = f.read()
+        with open(md_files[0], "r", encoding="utf-8") as f: 
+            content = f.read()
         
         return content, extract_path
 
 class FormatConverter:
     @staticmethod
     def generate_epub(markdown_text, work_dir, output_filename="output.epub"):
-        """
-        生成 EPUB
-        关键修复：将 cwd 设置为 work_dir，确保 Pandoc 能找到图片
-        """
         if not work_dir or not os.path.exists(work_dir):
             st.error("工作目录丢失，无法生成含图片的文档")
             return None
 
-        # 在工作目录下创建临时 md 文件
         temp_md_path = os.path.join(work_dir, "temp_render.md")
         output_path = os.path.join(work_dir, output_filename)
         
@@ -215,22 +258,20 @@ class FormatConverter:
             f.write(markdown_text)
             
         try:
-            # 检查 pandoc
             subprocess.run(["pandoc", "-v"], stdout=subprocess.PIPE, check=True)
             
             cmd = [
                 "pandoc", 
-                "temp_render.md",  # 只写文件名，因为我们会在 cwd 下运行
+                "temp_render.md",
                 "-o", output_filename,
                 "--toc", 
                 "--split-level=2", 
                 "--metadata", "title=Converted Document"
             ]
             
-            # 关键：cwd=work_dir
             subprocess.run(cmd, cwd=work_dir, check=True, capture_output=True)
-            
             return output_path
+            
         except subprocess.CalledProcessError as e:
             st.error(f"Pandoc 错误 (Exit {e.returncode}):\n{e.stderr.decode()}")
             return None
@@ -257,35 +298,26 @@ class FormatConverter:
             return None
 
 def process_images_for_preview(md_content, work_dir):
-    """
-    将 Markdown 中的本地图片路径替换为 Base64 编码，
-    以便在 Streamlit 预览中显示。
-    """
     if not work_dir:
         return md_content
 
     def replace_image(match):
         alt_text = match.group(1)
         image_path = match.group(2)
-        
-        # 尝试在工作目录中找到图片
         full_path = Path(work_dir) / image_path
         
         if full_path.exists():
             try:
                 with open(full_path, "rb") as img_file:
                     b64_string = base64.b64encode(img_file.read()).decode()
-                    # 根据后缀名判断 mime type
                     mime_type = "image/png"
-                    if image_path.lower().endswith('.jpg') or image_path.lower().endswith('.jpeg'):
+                    if image_path.lower().endswith(('.jpg', '.jpeg')):
                         mime_type = "image/jpeg"
-                    
                     return f"![{alt_text}](data:{mime_type};base64,{b64_string})"
             except:
                 pass
-        return match.group(0) # 找不到就原样返回
+        return match.group(0)
 
-    # 正则匹配 ![](path)
     pattern = r'!\[(.*?)\]\((.*?)\)'
     return re.sub(pattern, replace_image, md_content)
 
@@ -294,7 +326,8 @@ def get_pdf_page_count(file_bytes):
         from io import BytesIO
         reader = pypdf.PdfReader(BytesIO(file_bytes))
         return len(reader.pages)
-    except: return 0
+    except: 
+        return 0
 
 def display_pdf(file_bytes):
     if file_bytes is None:
@@ -310,22 +343,54 @@ def display_pdf(file_bytes):
 # 页面顶部标题
 st.markdown('<div class="compact-title">📚 夷卓汇智能转档</div>', unsafe_allow_html=True)
 
+# === 侧边栏 ===
 with st.sidebar:
-    st.header("⚙️ 控制面板")
+    st.markdown("### ⚙️ 控制面板")
+    
     with st.expander("🔑 密钥配置", expanded=True):
-        try: default_key = st.secrets.get("DOC2X_API_KEY", "")
-        except: default_key = ""
-        api_key = st.text_input("API Key", value=default_key, type="password")
+        try: 
+            default_key = st.secrets.get("DOC2X_API_KEY", "")
+        except: 
+            default_key = ""
+        api_key = st.text_input("API Key", value=default_key, type="password", help="输入您的 API 密钥")
 
-    mode = st.radio("选择模式", ["📄 PDF 转电子书", "📝 Markdown 转电子书"])
+    st.markdown("---")
+    
+    st.markdown("### 📂 选择模式")
+    mode = st.radio(
+        "转换模式",
+        ["📄 PDF 转电子书", "📝 Markdown 转电子书"],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    st.markdown("### 📤 上传文件")
     
     if mode == "📄 PDF 转电子书":
-        uploaded_file = st.file_uploader("上传文档", type=["pdf"])
-        start_btn = st.button("开始转换 ✨", type="primary", use_container_width=True)
+        uploaded_file = st.file_uploader("选择 PDF", type=["pdf"], help="支持最大 50MB")
+        start_btn = st.button("🚀 开始转换", type="primary", use_container_width=True)
     else:
-        uploaded_file = st.file_uploader("上传 Markdown", type=["md"])
-        start_btn = st.button("加载文件 📂", type="primary", use_container_width=True)
+        uploaded_file = st.file_uploader("选择 Markdown", type=["md", "markdown"])
+        start_btn = st.button("📂 加载文件", type="primary", use_container_width=True)
+    
+    # 使用说明
+    st.markdown("---")
+    with st.expander("ℹ️ 使用说明"):
+        st.markdown("""
+        **PDF 转电子书：**
+        1. 输入 API Key
+        2. 上传 PDF 文件
+        3. AI 智能解析
+        4. 预览编辑内容
+        5. 导出电子书
+        
+        **Markdown 转电子书：**
+        1. 上传 Markdown
+        2. 预览编辑
+        3. 导出电子书
+        """)
 
+# === 文件处理逻辑 ===
 if start_btn and uploaded_file:
     st.session_state.file_name = uploaded_file.name.rsplit('.', 1)[0]
     
@@ -337,13 +402,14 @@ if start_btn and uploaded_file:
             pdf_bytes = uploaded_file.read()
             uploaded_file.seek(0)
             st.session_state.page_count = get_pdf_page_count(pdf_bytes)
+            
             converter = CloudConverter(api_key)
             result_text = converter.convert(uploaded_file, pdf_bytes)
+            
             if result_text:
                 st.session_state.md_content = result_text
                 st.rerun()
     else:
-        # Markdown 模式：创建一个临时工作目录
         temp_work = Path("./output/temp_md_upload").resolve()
         if temp_work.exists(): shutil.rmtree(temp_work)
         temp_work.mkdir(parents=True, exist_ok=True)
@@ -352,29 +418,32 @@ if start_btn and uploaded_file:
         st.session_state.md_content = content
         st.session_state.pdf_bytes = None
         st.session_state.page_count = 0
-        st.session_state.work_dir = str(temp_work) # 设置工作目录
+        st.session_state.work_dir = str(temp_work)
         st.rerun()
 
-# 结果展示区
+# === 结果展示区 ===
 if st.session_state.md_content:
     # 状态栏
-    col_stat1, col_stat2, col_stat3 = st.columns([1,1,2])
-    with col_stat1: st.caption(f"📄 页数: {st.session_state.page_count}")
-    with col_stat2: st.caption(f"📝 字符: {len(st.session_state.md_content):,}")
+    col_stat1, col_stat2 = st.columns([1, 3])
+    with col_stat1: 
+        st.metric("📄 页数", st.session_state.page_count)
+    with col_stat2: 
+        st.metric("📝 字符数", f"{len(st.session_state.md_content):,}")
     
-    # 布局：左侧 PDF，右侧 Tabs (预览/编辑)
+    st.markdown("---")
+    
+    # 双栏布局
     col_left, col_right = st.columns([1, 1])
     
     with col_left:
-        st.markdown("##### 📄 原始文档")
+        st.markdown("#### 📄 原始文档")
         display_pdf(st.session_state.pdf_bytes)
     
     with col_right:
-        # 使用 Tabs 切换预览和编辑
-        tab_preview, tab_edit = st.tabs(["👁️ 渲染预览 (含图片)", "📝 源码编辑"])
+        st.markdown("#### ✍️ 内容编辑")
+        tab_preview, tab_edit = st.tabs(["👁️ 渲染预览", "📝 源码编辑"])
         
         with tab_preview:
-            # 实时将图片转为 Base64 以供预览
             preview_content = process_images_for_preview(
                 st.session_state.md_content, 
                 st.session_state.work_dir
@@ -391,9 +460,9 @@ if st.session_state.md_content:
             if edited_content != st.session_state.md_content:
                 st.session_state.md_content = edited_content
 
-    # 底部导出中心
+    # 导出中心
     st.markdown('<div class="export-zone">', unsafe_allow_html=True)
-    st.markdown("#### 📥 导出中心")
+    st.markdown("### 📥 导出中心")
     
     exp_c1, exp_c2, exp_c3 = st.columns(3)
     
@@ -407,45 +476,51 @@ if st.session_state.md_content:
         )
 
     with exp_c2:
-        if st.button("🟦 生成 Word (.docx)", use_container_width=True):
+        if st.button("🟦 生成 Word", use_container_width=True):
             with st.spinner("生成中..."):
                 docx_path = FormatConverter.generate_docx(
                     st.session_state.md_content,
-                    st.session_state.work_dir, # 传入工作目录
+                    st.session_state.work_dir,
                     f"{st.session_state.file_name}.docx"
                 )
                 if docx_path and os.path.exists(docx_path):
                     with open(docx_path, "rb") as f:
                         st.download_button(
-                            label="⬇️ 点击下载 Word",
+                            label="⬇️ 下载 Word",
                             data=f,
                             file_name=os.path.basename(docx_path),
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key="dl_docx_final"
+                            key="dl_docx"
                         )
-                    st.success("Word 生成成功")
 
     with exp_c3:
-        if st.button("📖 生成电子书 (.epub)", use_container_width=True):
+        if st.button("📖 生成 EPUB", use_container_width=True):
             with st.spinner("生成中..."):
                 epub_path = FormatConverter.generate_epub(
                     st.session_state.md_content,
-                    st.session_state.work_dir, # 传入工作目录
+                    st.session_state.work_dir,
                     f"{st.session_state.file_name}.epub"
                 )
                 if epub_path and os.path.exists(epub_path):
                     with open(epub_path, "rb") as f:
                         st.download_button(
-                            label="⬇️ 点击下载 EPUB",
+                            label="⬇️ 下载 EPUB",
                             data=f,
                             file_name=os.path.basename(epub_path),
                             mime="application/epub+zip",
-                            key="dl_epub_final"
+                            key="dl_epub"
                         )
-                    st.success("EPUB 生成成功")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-elif not start_btn:
-    # 空状态提示
-    st.info("👋 请在左侧上传文件开始")
+else:
+    # 欢迎页面
+    st.markdown("""
+    <div style="text-align: center; padding: 80px 20px; color: #95a5a6;">
+        <div style="font-size: 80px; margin-bottom: 30px;">📂</div>
+        <h2 style="color: #2c3e50;">欢迎使用夷卓汇智能转档平台</h2>
+        <p style="font-size: 18px; margin-top: 20px;">
+            👈 请在左侧侧边栏选择模式并上传文件开始工作
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
