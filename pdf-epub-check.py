@@ -252,8 +252,8 @@ class CloudConverter:
             content = f.read()
         
         return content, extract_path
+
 class FormatConverter:
-    # 确保类的定义与方法缩进是正确的
     @staticmethod
     def generate_epub(markdown_text, work_dir, output_filename="output.epub"):
         if not work_dir or not os.path.exists(work_dir):
@@ -289,7 +289,8 @@ class FormatConverter:
 
     @staticmethod
     def generate_docx(markdown_text, work_dir, output_filename="output.docx"):
-        if not work_dir or not os.path.exists(work_dir): return None
+        if not work_dir or not os.path.exists(work_dir): 
+            return None
         
         temp_md_path = os.path.join(work_dir, "temp_render.md")
         output_path = os.path.join(work_dir, output_filename)
@@ -345,7 +346,8 @@ def display_pdf(file_bytes):
         pdf_viewer(input=file_bytes, width=700, height=800)
     except Exception as e:
         st.error(f"PDF 组件加载失败: {str(e)}")
-        # --- 5. 主界面布局 ---
+
+# --- 5. 主界面布局 ---
 
 # 页面顶部标题
 st.markdown('<div class="compact-title">📚 夷卓汇智能转档</div>', unsafe_allow_html=True)
@@ -418,7 +420,8 @@ if start_btn and uploaded_file:
                 st.rerun()
     else:
         temp_work = Path("./output/temp_md_upload").resolve()
-        if temp_work.exists(): shutil.rmtree(temp_work)
+        if temp_work.exists(): 
+            shutil.rmtree(temp_work)
         temp_work.mkdir(parents=True, exist_ok=True)
         
         content = uploaded_file.read().decode('utf-8')
@@ -519,7 +522,8 @@ if st.session_state.md_content:
                         )
     
     st.markdown('</div>', unsafe_allow_html=True)
-    else:
+
+else:
     # 欢迎页面
     st.markdown("""
     <div style="text-align: center; padding: 80px 20px; color: #95a5a6;">
@@ -530,4 +534,3 @@ if st.session_state.md_content:
         </p>
     </div>
     """, unsafe_allow_html=True)
-
