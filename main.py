@@ -423,7 +423,7 @@ class DocumentStats:
 # =========================================================
 def main():
     st.set_page_config(page_title="夷卓汇文档工作台", layout="wide")
-    st.title("🛠️ 夷卓汇文档工作台")
+    st.title("🛠️ 夷卓汇文档工作台 - ePUb / Markdown")
 
     if not DocComparator:
         st.warning("提示: 缺失 comparator.py 模块，比对功能将受限，但转换功能正常。")
@@ -667,4 +667,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
