@@ -445,13 +445,13 @@ def main():
         api_key_doc2x = st.text_input(
             "API Key (标准引擎)",
             type="password",
-            help="使用 Doc2X 云端服务解析"
+            help="使用 标准引擎 云端服务解析"
         )
         
         api_key_mineru = st.text_input(
             "API Key (期刊增强)",
             type="password",
-            help="使用 期刊增加 在线服务解析（适合学术论文）"
+            help="使用 期刊增强 云端服务解析（适合学术论文）"
         )
         
         if api_key_mineru:
@@ -667,3 +667,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
