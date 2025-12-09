@@ -9,14 +9,21 @@ import tempfile
 import re
 from pathlib import Path
 
-# 引入比对模块 (保持原有逻辑)
+# 引入比对模块
 try:
     from comparator import DocComparator
 except ImportError:
     DocComparator = None
 
+# ⭐ 新增：尝试导入 PyPDF 用于统计页数
+try:
+    import PyPDF
+    PYPDF2_AVAILABLE = True
+except ImportError:
+    PYPDF2_AVAILABLE = False
+
 # =========================================================
-# 1. API 客户端 (保持原有逻辑)
+# 1. Doc2X API 客户端
 # =========================================================
 class Doc2XPDFClient:
     def __init__(self, api_key):
@@ -99,7 +106,174 @@ class Doc2XPDFClient:
         return extract_path
 
 # =========================================================
-# 2. 格式转换器 (⭐ 核心修改：修复正则逻辑)
+# 2. MinerU 在线 API 客户端
+# =========================================================
+class MinerUOnlineClient:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.base_url = "https://mineru.net/api/v4"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+
+    def process(self, file_path):
+        """
+        使用 MinerU 在线 API 解析 PDF
+        返回与 Doc2X 相同结构的输出目录
+        """
+        original_file = Path(file_path)
+        
+        # 步骤1: 申请上传链接
+        st.toast("1. 申请上传链接...", icon="🔗")
+        upload_url, batch_id = self._get_upload_url(original_file.name)
+        
+        # 步骤2: 上传文件
+        st.toast("2. 上传文件到解析中心...", icon="📤")
+        self._upload_file(file_path, upload_url)
+        
+        # 步骤3: 等待解析完成
+        st.toast("3. AI 正在解析...", icon="🧠")
+        download_url = self._wait_for_result(batch_id, original_file.name)
+        
+        # 步骤4: 下载并解压结果
+        st.toast("4. 下载解析结果...", icon="📥")
+        output_dir = self._download_and_extract(download_url, original_file)
+        
+        return output_dir
+
+    def _get_upload_url(self, filename):
+        """申请文件上传链接"""
+        url = f"{self.base_url}/file-urls/batch"
+        data = {
+            "files": [{"name": filename}],
+            "model_version": "vlm",
+            "enable_formula": True,
+            "enable_table": True
+        }
+        
+        try:
+            res = requests.post(url, headers=self.headers, json=data, timeout=30)
+            if res.status_code != 200:
+                raise Exception(f"申请上传链接失败: HTTP {res.status_code}")
+            
+            result = res.json()
+            if result["code"] != 0:
+                raise Exception(f"解析错误: {result.get('msg', '未知错误')}")
+            
+            batch_id = result["data"]["batch_id"]
+            upload_url = result["data"]["file_urls"][0]
+            
+            return upload_url, batch_id
+            
+        except requests.RequestException as e:
+            raise Exception(f"网络请求失败: {str(e)}")
+
+    def _upload_file(self, file_path, upload_url):
+        """上传文件到 MinerU"""
+        try:
+            with open(file_path, 'rb') as f:
+                res = requests.put(upload_url, data=f, timeout=300)
+                if res.status_code != 200:
+                    raise Exception(f"文件上传失败: HTTP {res.status_code}")
+        except requests.RequestException as e:
+            raise Exception(f"上传文件失败: {str(e)}")
+
+    def _wait_for_result(self, batch_id, filename):
+        """轮询检查解析状态"""
+        url = f"{self.base_url}/extract-results/batch/{batch_id}"
+        
+        progress_text = st.empty()
+        bar = st.progress(0)
+        
+        max_wait_time = 600
+        start_time = time.time()
+        
+        while True:
+            if time.time() - start_time > max_wait_time:
+                raise Exception("解析超时，请稍后重试")
+            
+            time.sleep(3)
+            
+            try:
+                res = requests.get(url, headers=self.headers, timeout=30)
+                if res.status_code != 200:
+                    continue
+                
+                result = res.json()
+                if result["code"] != 0:
+                    continue
+                
+                extract_results = result["data"]["extract_result"]
+                file_result = next((r for r in extract_results if r["file_name"] == filename), None)
+                
+                if not file_result:
+                    continue
+                
+                state = file_result["state"]
+                
+                if state == "waiting-file":
+                    bar.progress(0.1)
+                    progress_text.text("等待文件上传...")
+                    
+                elif state == "pending":
+                    bar.progress(0.2)
+                    progress_text.text("排队中...")
+                    
+                elif state == "running":
+                    if "extract_progress" in file_result:
+                        prog = file_result["extract_progress"]
+                        extracted = prog.get("extracted_pages", 0)
+                        total = prog.get("total_pages", 1)
+                        percent = min(0.2 + (extracted / total) * 0.6, 0.8)
+                        bar.progress(percent)
+                        progress_text.text(f"解析中: {extracted}/{total} 页")
+                    else:
+                        bar.progress(0.5)
+                        progress_text.text("正在解析...")
+                        
+                elif state == "converting":
+                    bar.progress(0.9)
+                    progress_text.text("格式转换中...")
+                    
+                elif state == "done":
+                    bar.progress(1.0)
+                    progress_text.empty()
+                    st.toast("✅ 解析完成！", icon="🎉")
+                    return file_result["full_zip_url"]
+                    
+                elif state == "failed":
+                    err_msg = file_result.get("err_msg", "未知错误")
+                    raise Exception(f"解析失败: {err_msg}")
+                    
+            except requests.RequestException:
+                continue
+
+    def _download_and_extract(self, download_url, original_file):
+        """下载并解压结果"""
+        output_dir = Path(f"./output/{original_file.stem}")
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            r = requests.get(download_url, timeout=300)
+            zip_path = output_dir / "result.zip"
+            with open(zip_path, 'wb') as f:
+                f.write(r.content)
+            
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                z.extractall(output_dir)
+            
+            zip_path.unlink()
+            
+            return output_dir
+            
+        except Exception as e:
+            raise Exception(f"下载结果失败: {str(e)}")
+
+# =========================================================
+# 3. 格式转换器
 # =========================================================
 class FormatConverter:
     @staticmethod
@@ -109,39 +283,26 @@ class FormatConverter:
 
     @staticmethod
     def get_md_file_path(folder):
-        md_files = list(folder.glob("**/output.md"))
-        if not md_files: md_files = list(folder.glob("**/*.md"))
+        """查找 Markdown 文件（支持的目录结构）"""
+        md_files = list(folder.glob("**/auto/*.md"))
+        if not md_files:
+            md_files = list(folder.glob("**/output.md"))
+        if not md_files:
+            md_files = list(folder.glob("**/*.md"))
         return md_files[0] if md_files else None
 
     @staticmethod
     def normalize_math_formulas(md_content):
-        """
-        ⭐ 核心修复：清理公式内部的空格
-        Pandoc 要求 $ 和内容之间不能有空格，否则不识别
-        """
+        """标准化数学公式格式"""
         if not md_content: return ""
         
-        # 1. 转换 \( ... \) 为 $...$，并去除紧邻的空格
-        # \( 及其后所有空格 -> $
         md_content = re.sub(r'\\\(\s*', '$', md_content)
-        # 空格及其后 \) -> $
         md_content = re.sub(r'\s*\\\)', '$', md_content)
-        
-        # 2. 转换 \[ ... \] 为 $$...$$
         md_content = re.sub(r'\\\[\s*', '\n$$\n', md_content)
         md_content = re.sub(r'\s*\\\]', '\n$$\n', md_content)
-        
-        # 3. ⭐ 关键：修复已有的 $ 格式中的空格问题
-        # 将 "$  x  $" 替换为 "$x$"
-        # (?<!\$) 表示前面不是 $ (避免匹配到 $$)
-        # ([^\$]+?) 捕获内部内容
         md_content = re.sub(r'(?<!\$)\$\s+([^\$]+?)\s+\$(?!\$)', r'$\1$', md_content)
-        
-        # 4. 修复单独的 $ 后空格
         md_content = re.sub(r'(?<!\$)\$\s+', '$', md_content)
         md_content = re.sub(r'\s+\$(?!\$)', '$', md_content)
-
-        # 5. 规范块级公式 $$ 的换行
         md_content = re.sub(r'([^\n])\$\$', r'\1\n$$', md_content)
         md_content = re.sub(r'\$\$([^\n])', r'$$\n\1', md_content)
         
@@ -159,7 +320,6 @@ class FormatConverter:
         input_path = Path(input_file)
         cwd = input_path.parent
         
-        # 预处理：标准化 Markdown (修正公式空格)
         temp_input = None
         if input_path.suffix.lower() == '.md':
             with open(input_path, 'r', encoding='utf-8') as f:
@@ -187,16 +347,15 @@ class FormatConverter:
                 "--standalone",
                 "--toc",
                 "--metadata-file", str(metadata_file),
-                "-f", "markdown+tex_math_dollars" # 明确告诉 Pandoc 识别 $公式$
+                "-f", "markdown+tex_math_dollars"
             ])
 
-            # ⭐ 公式渲染逻辑
             if math_mode == "mathml":
-                cmd.append("--mathml")  # EPUB3 标准，矢量清晰，推荐
+                cmd.append("--mathml")
             elif math_mode == "webtex":
-                cmd.append("--webtex")  # 转为图片，兼容性好但可能慢
+                cmd.append("--webtex")
             elif math_mode == "mathjax":
-                cmd.append("--mathjax") # JS渲染，EPUB兼容性差
+                cmd.append("--mathjax")
             
         elif format_type == "docx":
             cmd.extend(["--standalone", "-f", "markdown+tex_math_dollars"])
@@ -212,7 +371,55 @@ class FormatConverter:
             if format_type == "epub" and metadata_file.exists(): metadata_file.unlink()
 
 # =========================================================
-# 3. Streamlit 主界面 (保持原有逻辑)
+# ⭐ 4. 文档统计工具（新增）
+# =========================================================
+class DocumentStats:
+    @staticmethod
+    def count_pdf_pages(pdf_path):
+        """统计 PDF 页数"""
+        if not PYPDF2_AVAILABLE:
+            return None
+        
+        try:
+            with open(pdf_path, 'rb') as f:
+                reader = PyPDF.PdfReader(f)
+                return len(reader.pages)
+        except Exception:
+            return None
+    
+    @staticmethod
+    def count_markdown_words(md_content):
+        """统计 Markdown 字数（中英文）"""
+        if not md_content:
+            return 0, 0, 0
+        
+        # 移除代码块
+        md_content = re.sub(r'```[\s\S]*?```', '', md_content)
+        # 移除行内代码
+        md_content = re.sub(r'`[^`]+`', '', md_content)
+        # 移除图片
+        md_content = re.sub(r'!\[.*?\]\(.*?\)', '', md_content)
+        # 移除链接（保留文字）
+        md_content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', md_content)
+        # 移除 Markdown 标记
+        md_content = re.sub(r'[#*_~`]', '', md_content)
+        # 移除数学公式
+        md_content = re.sub(r'\$\$[\s\S]*?\$\$', '', md_content)
+        md_content = re.sub(r'\$[^\$]+\$', '', md_content)
+        
+        # 统计中文字符数（包括中文标点）
+        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', md_content))
+        
+        # 统计英文单词数
+        english_words = len(re.findall(r'\b[a-zA-Z]+\b', md_content))
+        
+        # 总字数（中文按字符计，英文按单词计）
+        total_words = chinese_chars + english_words
+        
+        return total_words, chinese_chars, english_words
+
+# =========================================================
+# 5. Streamlit 主界面
 # =========================================================
 def main():
     st.set_page_config(page_title="夷卓汇文档工作台", layout="wide")
@@ -227,18 +434,44 @@ def main():
         st.session_state.current_md_content = ""
     if "work_paths" not in st.session_state:
         st.session_state.work_paths = {}
+    # ⭐ 新增：文档统计数据
+    if "doc_stats" not in st.session_state:
+        st.session_state.doc_stats = {}
 
+    # ========== 侧边栏 ==========
     with st.sidebar:
-        st.header("设置")
-        api_key = st.text_input("API Key", type="password")
+        st.header("⚙️ 解析引擎设置")
         
-        st.subheader("数学公式渲染")
-        # 默认改为 MathML，因为它是 EPUB 标准，如果阅读器支持会显示得很完美
+        api_key_doc2x = st.text_input(
+            "API Key (标准引擎)",
+            type="password",
+            help="使用 Doc2X 云端服务解析"
+        )
+        
+        api_key_mineru = st.text_input(
+            "API Key (期刊增强)",
+            type="password",
+            help="使用 期刊增加 在线服务解析（适合学术论文）"
+        )
+        
+        if api_key_mineru:
+            st.success("🚀 将使用 期刊增强 引擎")
+            selected_engine = "mineru"
+        elif api_key_doc2x:
+            st.info("☁️ 将使用标准引擎")
+            selected_engine = "doc2x"
+        else:
+            st.warning("请填写至少一个 API Key")
+            selected_engine = None
+        
+        st.divider()
+        
+        st.subheader("📐 数学公式渲染")
         math_mode = st.radio(
             "选择渲染方式",
             ["mathml", "webtex", "mathjax"],
             index=0,
-            help="**MathML**: EPUB标准格式(推荐)。\n**WebTex**: 转为图片，兼容老设备。\n**MathJax**: 需阅读器支持JS。"
+            help="**MathML**: EPUB标准格式(推荐)\n**WebTex**: 转为图片，兼容老设备\n**MathJax**: 需阅读器支持JS"
         )
         st.session_state.math_mode = math_mode
         
@@ -256,15 +489,15 @@ def main():
                             with open(docx_path, "wb") as f:
                                 f.write(d2e_file.getbuffer())
                             epub_path = tmp_path / f"{docx_path.stem}.epub"
-                            with st.spinner("正在转换 DOCX 到 EPUB..."):
+                            with st.spinner("正在转换..."):
                                 FormatConverter.run_pandoc(
-                                    docx_path, epub_path, "epub", 
+                                    docx_path, epub_path, "epub",
                                     source_filename=d2e_file.name,
                                     math_mode=st.session_state.math_mode
                                 )
                             st.success("转换成功！")
                             with open(epub_path, "rb") as f:
-                                st.download_button(label="📥 下载 EPUB", data=f, file_name=epub_path.name)
+                                st.download_button("📥 下载 EPUB", f, file_name=epub_path.name)
                     except Exception as e:
                         st.error(f"转换失败: {e}")
 
@@ -273,26 +506,46 @@ def main():
             st.session_state.clear()
             st.rerun()
 
+    # ========== 主流程 ==========
+    
     # 阶段 1: 上传
     if st.session_state.step == "upload":
         st.info("步骤 1/3: 上传 PDF 进行智能解析")
         uploaded_file = st.file_uploader("选择 PDF 文件", type=["pdf"])
 
         if uploaded_file and st.button("🚀 开始解析"):
-            if not api_key:
-                st.error("请先在左侧填写 API Key")
+            if not selected_engine:
+                st.error("请先在左侧填写 API Key（标准 或 期刊增强）")
                 return
+            
             try:
                 temp_dir = Path("./temp_uploads")
                 temp_dir.mkdir(exist_ok=True)
-                pdf_path = (temp_dir / uploaded_file.name).resolve() 
-                with open(pdf_path, "wb") as f: f.write(uploaded_file.getbuffer())
+                pdf_path = (temp_dir / uploaded_file.name).resolve()
+                with open(pdf_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
 
-                client = Doc2XPDFClient(api_key)
-                output_dir = client.process(pdf_path)
-                md_path = FormatConverter.get_md_file_path(output_dir)
+                # ⭐ 统计 PDF 页数
+                pdf_pages = DocumentStats.count_pdf_pages(pdf_path)
+
+                if selected_engine == "mineru":
+                    st.info("🔬 使用期刊增强引擎解析...")
+                    client = MinerUOnlineClient(api_key_mineru)
+                    output_dir = client.process(pdf_path)
+                else:
+                    st.info("☁️ 使用  标准引擎解析...")
+                    client = Doc2XPDFClient(api_key_doc2x)
+                    output_dir = client.process(pdf_path)
                 
-                with open(md_path, "r", encoding="utf-8") as f: content = f.read()
+                md_path = FormatConverter.get_md_file_path(output_dir)
+                if not md_path:
+                    raise Exception("未找到 Markdown 文件")
+                
+                with open(md_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # ⭐ 统计字数
+                total_words, chinese_chars, english_words = DocumentStats.count_markdown_words(content)
 
                 st.session_state.work_paths = {
                     "pdf": str(pdf_path),
@@ -300,16 +553,53 @@ def main():
                     "dir": str(output_dir.resolve())
                 }
                 st.session_state.current_md_content = content
+                
+                # ⭐ 保存统计数据
+                st.session_state.doc_stats = {
+                    "pdf_pages": pdf_pages,
+                    "total_words": total_words,
+                    "chinese_chars": chinese_chars,
+                    "english_words": english_words
+                }
+                
                 st.session_state.step = "editing"
                 st.rerun()
+                
             except Exception as e:
                 st.error(f"处理失败: {str(e)}")
+                import traceback
+                st.error(f"详细错误:\n```\n{traceback.format_exc()}\n```")
 
     # 阶段 2: 编辑
     elif st.session_state.step == "editing":
         paths = st.session_state.work_paths
+        stats = st.session_state.doc_stats
+        
+        # ⭐ 显示文档统计信息
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+        
+        with col_stat1:
+            if stats.get("pdf_pages"):
+                st.metric("📄 PDF 页数", f"{stats['pdf_pages']} 页")
+            else:
+                st.metric("📄 PDF 页数", "未知")
+                if not PYPDF2_AVAILABLE:
+                    st.caption("💡 安装 PyPDF2 可显示页数")
+        
+        with col_stat2:
+            st.metric("📊 总字数", f"{stats.get('total_words', 0):,}")
+        
+        with col_stat3:
+            st.metric("🇨🇳 中文字符", f"{stats.get('chinese_chars', 0):,}")
+        
+        with col_stat4:
+            st.metric("🇬🇧 英文单词", f"{stats.get('english_words', 0):,}")
+        
+        st.divider()
+        
         col1, col3 = st.columns([3, 1])
-        with col1: st.subheader("步骤 2/3: 校对与编辑")
+        with col1:
+            st.subheader("步骤 2/3: 校对与编辑")
         with col3:
             if st.button("💾 完成校对，生成文档", type="primary", use_container_width=True):
                 st.session_state.step = "generating"
@@ -317,12 +607,20 @@ def main():
 
         if DocComparator:
             cmp = DocComparator()
-            cmp.render_editor_ui(paths["pdf"], st.session_state.current_md_content, image_root=paths["dir"])
+            cmp.render_editor_ui(
+                paths["pdf"],
+                st.session_state.current_md_content,
+                image_root=paths["dir"]
+            )
             if "editor_textarea" in st.session_state:
                 st.session_state.current_md_content = st.session_state.editor_textarea
         else:
-            st.warning("简易模式")
-            st.session_state.current_md_content = st.text_area("Markdown", st.session_state.current_md_content, height=600)
+            st.warning("简易编辑模式")
+            st.session_state.current_md_content = st.text_area(
+                "Markdown",
+                st.session_state.current_md_content,
+                height=600
+            )
 
     # 阶段 3: 导出
     elif st.session_state.step == "generating":
@@ -333,29 +631,39 @@ def main():
         pdf_path = Path(paths["pdf"])
         math_mode = st.session_state.get('math_mode', 'mathml')
         
-        st.write("1. 保存内容...")
+        st.write("1. 保存最终内容...")
         FormatConverter.save_md_content(st.session_state.current_md_content, md_path)
         
         try:
-            st.write("2. 生成 Word...")
+            st.write("2. 生成 Word 文档...")
             docx_path = output_dir / f"{md_path.stem}.docx"
             FormatConverter.run_pandoc(md_path, docx_path, "docx")
             
-            st.write(f"3. 生成 EPUB (模式: {math_mode})...")
+            st.write(f"3. 生成 EPUB 电子书 (渲染模式: {math_mode})...")
             epub_path = output_dir / f"{md_path.stem}.epub"
-            FormatConverter.run_pandoc(md_path, epub_path, "epub", source_filename=pdf_path.name, math_mode=math_mode)
+            FormatConverter.run_pandoc(
+                md_path, epub_path, "epub",
+                source_filename=pdf_path.name,
+                math_mode=math_mode
+            )
             
-            st.success("✅ 完成！")
+            st.success("✅ 所有任务完成！")
+            
             c1, c2, c3, c4 = st.columns(4)
-            with open(docx_path, "rb") as f: c1.download_button("📘 Word", f, file_name=docx_path.name)
-            with open(epub_path, "rb") as f: c2.download_button("📗 EPUB", f, file_name=epub_path.name)
-            with open(md_path, "rb") as f: c3.download_button("📝 Markdown", f, file_name=md_path.name)
-            if c4.button("⬅️ 返回修改"):
+            with open(docx_path, "rb") as f:
+                c1.download_button("📘 下载 Word", f, file_name=docx_path.name)
+            with open(epub_path, "rb") as f:
+                c2.download_button("📗 下载 EPUB", f, file_name=epub_path.name)
+            with open(md_path, "rb") as f:
+                c3.download_button("📝 下载 Markdown", f, file_name=md_path.name)
+            if c4.button("⬅️ 返回继续修改"):
                 st.session_state.step = "editing"
                 st.rerun()
+                
         except Exception as e:
-            st.error(f"错误: {e}")
-            if st.button("重试"): st.rerun()
+            st.error(f"转换出错: {e}")
+            if st.button("重试"):
+                st.rerun()
 
 if __name__ == "__main__":
     main()
