@@ -6,6 +6,7 @@ import zipfile
 import shutil
 import subprocess
 import tempfile
+import re
 from pathlib import Path
 
 # 引入比对模块 (保持原有逻辑)
@@ -15,7 +16,7 @@ except ImportError:
     DocComparator = None
 
 # =========================================================
-# 1. API 客户端
+# 1. API 客户端 (保持原有逻辑)
 # =========================================================
 class Doc2XPDFClient:
     def __init__(self, api_key):
@@ -98,7 +99,7 @@ class Doc2XPDFClient:
         return extract_path
 
 # =========================================================
-# 2. 格式转换器 (增强版 - 修复数学公式)
+# 2. 格式转换器 (⭐ 核心修改：修复正则逻辑)
 # =========================================================
 class FormatConverter:
     @staticmethod
@@ -113,150 +114,105 @@ class FormatConverter:
         return md_files[0] if md_files else None
 
     @staticmethod
+    def normalize_math_formulas(md_content):
+        """
+        ⭐ 核心修复：清理公式内部的空格
+        Pandoc 要求 $ 和内容之间不能有空格，否则不识别
+        """
+        if not md_content: return ""
+        
+        # 1. 转换 \( ... \) 为 $...$，并去除紧邻的空格
+        # \( 及其后所有空格 -> $
+        md_content = re.sub(r'\\\(\s*', '$', md_content)
+        # 空格及其后 \) -> $
+        md_content = re.sub(r'\s*\\\)', '$', md_content)
+        
+        # 2. 转换 \[ ... \] 为 $$...$$
+        md_content = re.sub(r'\\\[\s*', '\n$$\n', md_content)
+        md_content = re.sub(r'\s*\\\]', '\n$$\n', md_content)
+        
+        # 3. ⭐ 关键：修复已有的 $ 格式中的空格问题
+        # 将 "$  x  $" 替换为 "$x$"
+        # (?<!\$) 表示前面不是 $ (避免匹配到 $$)
+        # ([^\$]+?) 捕获内部内容
+        md_content = re.sub(r'(?<!\$)\$\s+([^\$]+?)\s+\$(?!\$)', r'$\1$', md_content)
+        
+        # 4. 修复单独的 $ 后空格
+        md_content = re.sub(r'(?<!\$)\$\s+', '$', md_content)
+        md_content = re.sub(r'\s+\$(?!\$)', '$', md_content)
+
+        # 5. 规范块级公式 $$ 的换行
+        md_content = re.sub(r'([^\n])\$\$', r'\1\n$$', md_content)
+        md_content = re.sub(r'\$\$([^\n])', r'$$\n\1', md_content)
+        
+        return md_content
+
+    @staticmethod
     def clean_image_captions(md_content):
-        """清理 Markdown 中图片的描述文字（alt text）"""
-        import re
+        if not md_content: return ""
         pattern = r'!\[([^\]]*)\]\(([^\)]+)\)'
         cleaned = re.sub(pattern, r'![](\2)', md_content)
         return cleaned
 
     @staticmethod
-    def run_pandoc(input_file, output_file, format_type, source_filename=None, math_mode="webtex"):
-        """
-        通用 Pandoc 转换函数
-        :param input_file: 输入文件路径 (可以是 .md 或 .docx)
-        :param output_file: 输出文件路径
-        :param format_type: 目标格式 'docx' 或 'epub'
-        :param source_filename: 源文件名（用于设置标题）
-        :param math_mode: 数学公式渲染模式 ('webtex', 'mathjax', 'mathml')
-        """
+    def run_pandoc(input_file, output_file, format_type, source_filename=None, math_mode="mathml"):
         input_path = Path(input_file)
         cwd = input_path.parent
         
-        # 如果是 Markdown 转 EPUB，先清理图片标题
-        temp_md = None
-        if format_type == "epub" and input_path.suffix.lower() == '.md':
-            with open(input_path, "r", encoding="utf-8") as f:
+        # 预处理：标准化 Markdown (修正公式空格)
+        temp_input = None
+        if input_path.suffix.lower() == '.md':
+            with open(input_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            cleaned_content = FormatConverter.clean_image_captions(content)
-            temp_md = cwd / f"temp_{input_path.name}"
-            with open(temp_md, "w", encoding="utf-8") as f:
-                f.write(cleaned_content)
-            input_path = temp_md
-        
-        cmd = ["pandoc", input_path.name, "-o", str(output_file.resolve())]
-        
-        is_docx_input = input_path.suffix.lower() == '.docx'
-
-        if format_type == "epub":
-            # 使用源文件名作为标题
-            if source_filename:
-                title = Path(source_filename).stem
-            else:
-                title = input_path.stem
             
-            # 创建 metadata 文件
-            metadata_content = f"---\ntitle: {title}\n---\n"
-            metadata_file = cwd / "epub-metadata.yaml"
+            content = FormatConverter.normalize_math_formulas(content)
+            content = FormatConverter.clean_image_captions(content)
+            
+            temp_input = cwd / f"temp_fix_{input_path.name}"
+            with open(temp_input, 'w', encoding='utf-8') as f:
+                f.write(content)
+            target_input = temp_input.name
+        else:
+            target_input = input_path.name
+
+        cmd = ["pandoc", target_input, "-o", str(output_file.resolve())]
+        
+        if format_type == "epub":
+            title = Path(source_filename).stem if source_filename else input_path.stem
+            metadata_file = cwd / "metadata.yaml"
             with open(metadata_file, "w", encoding="utf-8") as f:
-                f.write(metadata_content)
+                f.write(f"---\ntitle: {title}\n---\n")
             
             cmd.extend([
+                "--standalone",
                 "--toc",
-                "--toc-depth=3",
-                "--epub-chapter-level=2",
                 "--metadata-file", str(metadata_file),
-                "--standalone"
+                "-f", "markdown+tex_math_dollars" # 明确告诉 Pandoc 识别 $公式$
             ])
+
+            # ⭐ 公式渲染逻辑
+            if math_mode == "mathml":
+                cmd.append("--mathml")  # EPUB3 标准，矢量清晰，推荐
+            elif math_mode == "webtex":
+                cmd.append("--webtex")  # 转为图片，兼容性好但可能慢
+            elif math_mode == "mathjax":
+                cmd.append("--mathjax") # JS渲染，EPUB兼容性差
             
-            if not is_docx_input:
-                # ⭐ 关键修改：数学公式渲染
-                if math_mode == "webtex":
-                    # 将公式转为图片（最佳兼容性）
-                    cmd.append("--webtex")
-                elif math_mode == "mathjax":
-                    # 使用 MathJax（需要网络）
-                    cmd.append("--mathjax")
-                else:
-                    # 使用 MathML（部分阅读器不支持）
-                    cmd.append("--mathml")
-                
-                # 添加 CSS
-                cmd.extend(["--css", "epub-style.css"])
-                
-                # 创建CSS文件
-                css_content = """body { 
-    font-family: serif; 
-    line-height: 1.6;
-}
-table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 20px 0;
-    border: 1px solid #333;
-}
-th, td {
-    border: 1px solid #666;
-    padding: 8px;
-    text-align: left;
-}
-th { 
-    background-color: #f2f2f2; 
-    font-weight: bold; 
-}
-img { 
-    max-width: 100%; 
-    height: auto;
-    display: block;
-    margin: 10px auto;
-}
-/* 数学公式样式 */
-.math { 
-    font-family: "Latin Modern Math", "STIX Two Math", serif;
-    overflow-x: auto;
-}
-mjx-container {
-    overflow-x: auto;
-}
-"""
-                css_file = cwd / "epub-style.css"
-                with open(css_file, "w", encoding="utf-8") as f:
-                    f.write(css_content)
-            else:
-                cmd.extend(["-f", "docx", "-t", "epub"])
-        
         elif format_type == "docx":
-            if not is_docx_input:
-                # Markdown 转 Docx - 也需要处理数学公式
-                cmd.extend([
-                    "--standalone",
-                    "-f", "markdown+pipe_tables+grid_tables"
-                ])
-                # Word 文档数学公式支持
-                if math_mode == "webtex":
-                    cmd.append("--webtex")
-        
+            cmd.extend(["--standalone", "-f", "markdown+tex_math_dollars"])
+
         cmd.append("--resource-path=.")
-        
-        # 执行命令
+
         try:
             subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             raise Exception(f"Pandoc 转换失败: {e.stderr}")
-        
-        # 清理临时文件
-        if format_type == "epub":
-            if not is_docx_input:
-                if 'css_file' in locals() and css_file.exists():
-                    css_file.unlink()
-            if 'metadata_file' in locals() and metadata_file.exists():
-                metadata_file.unlink()
-        
-        if temp_md and temp_md.exists():
-            temp_md.unlink()
+        finally:
+            if temp_input and temp_input.exists(): temp_input.unlink()
+            if format_type == "epub" and metadata_file.exists(): metadata_file.unlink()
 
 # =========================================================
-# 3. Streamlit 主界面
+# 3. Streamlit 主界面 (保持原有逻辑)
 # =========================================================
 def main():
     st.set_page_config(page_title="夷卓汇文档工作台", layout="wide")
@@ -272,27 +228,23 @@ def main():
     if "work_paths" not in st.session_state:
         st.session_state.work_paths = {}
 
-    # -----------------------------------------------------
-    # 侧边栏：设置与工具箱
-    # -----------------------------------------------------
     with st.sidebar:
         st.header("设置")
         api_key = st.text_input("API Key", type="password")
         
-        # 数学公式渲染选项
         st.subheader("数学公式渲染")
+        # 默认改为 MathML，因为它是 EPUB 标准，如果阅读器支持会显示得很完美
         math_mode = st.radio(
             "选择渲染方式",
-            ["webtex", "mathjax", "mathml"],
+            ["mathml", "webtex", "mathjax"],
             index=0,
-            help="webtex: 转为图片(推荐)\nmathjax: 在线渲染\nmathml: 原生标记"
+            help="**MathML**: EPUB标准格式(推荐)。\n**WebTex**: 转为图片，兼容老设备。\n**MathJax**: 需阅读器支持JS。"
         )
         st.session_state.math_mode = math_mode
         
         st.divider()
         st.header("🔧 独立工具箱")
         
-        # DOCX 转 EPUB
         with st.expander("📄 DOCX 转 EPUB"):
             d2e_file = st.file_uploader("上传 Word 文档", type=["docx"], key="d2e_uploader")
             if d2e_file:
@@ -303,36 +255,25 @@ def main():
                             docx_path = tmp_path / d2e_file.name
                             with open(docx_path, "wb") as f:
                                 f.write(d2e_file.getbuffer())
-                            
                             epub_path = tmp_path / f"{docx_path.stem}.epub"
-                            
                             with st.spinner("正在转换 DOCX 到 EPUB..."):
                                 FormatConverter.run_pandoc(
                                     docx_path, epub_path, "epub", 
                                     source_filename=d2e_file.name,
-                                    math_mode=st.session_state.get('math_mode', 'webtex')
+                                    math_mode=st.session_state.math_mode
                                 )
-                            
                             st.success("转换成功！")
                             with open(epub_path, "rb") as f:
-                                st.download_button(
-                                    label="📥 下载 EPUB",
-                                    data=f,
-                                    file_name=epub_path.name,
-                                    mime="application/epub+zip"
-                                )
+                                st.download_button(label="📥 下载 EPUB", data=f, file_name=epub_path.name)
                     except Exception as e:
                         st.error(f"转换失败: {e}")
 
         st.divider()
         if st.button("🔄 重置所有状态"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+            st.session_state.clear()
             st.rerun()
 
-    # -----------------------------------------------------
-    # 阶段 1: 上传 PDF
-    # -----------------------------------------------------
+    # 阶段 1: 上传
     if st.session_state.step == "upload":
         st.info("步骤 1/3: 上传 PDF 进行智能解析")
         uploaded_file = st.file_uploader("选择 PDF 文件", type=["pdf"])
@@ -341,23 +282,17 @@ def main():
             if not api_key:
                 st.error("请先在左侧填写 API Key")
                 return
-
             try:
                 temp_dir = Path("./temp_uploads")
                 temp_dir.mkdir(exist_ok=True)
                 pdf_path = (temp_dir / uploaded_file.name).resolve() 
-                
-                with open(pdf_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+                with open(pdf_path, "wb") as f: f.write(uploaded_file.getbuffer())
 
                 client = Doc2XPDFClient(api_key)
                 output_dir = client.process(pdf_path)
-                
                 md_path = FormatConverter.get_md_file_path(output_dir)
-                if not md_path: raise Exception("未找到解析结果 Markdown")
-
-                with open(md_path, "r", encoding="utf-8") as f:
-                    content = f.read()
+                
+                with open(md_path, "r", encoding="utf-8") as f: content = f.read()
 
                 st.session_state.work_paths = {
                     "pdf": str(pdf_path),
@@ -367,19 +302,14 @@ def main():
                 st.session_state.current_md_content = content
                 st.session_state.step = "editing"
                 st.rerun()
-
             except Exception as e:
                 st.error(f"处理失败: {str(e)}")
 
-    # -----------------------------------------------------
-    # 阶段 2: 编辑与比对
-    # -----------------------------------------------------
+    # 阶段 2: 编辑
     elif st.session_state.step == "editing":
         paths = st.session_state.work_paths
-        
-        col1, col2, col3 = st.columns([2, 1, 1])
-        with col1:
-            st.subheader("步骤 2/3: 校对与编辑")
+        col1, col3 = st.columns([3, 1])
+        with col1: st.subheader("步骤 2/3: 校对与编辑")
         with col3:
             if st.button("💾 完成校对，生成文档", type="primary", use_container_width=True):
                 st.session_state.step = "generating"
@@ -387,69 +317,45 @@ def main():
 
         if DocComparator:
             cmp = DocComparator()
-            cmp.render_editor_ui(
-                paths["pdf"], 
-                st.session_state.current_md_content, 
-                image_root=paths["dir"]
-            )
+            cmp.render_editor_ui(paths["pdf"], st.session_state.current_md_content, image_root=paths["dir"])
             if "editor_textarea" in st.session_state:
                 st.session_state.current_md_content = st.session_state.editor_textarea
         else:
-            st.warning("未检测到 comparator 模块，进入简易编辑模式。")
-            new_content = st.text_area("Markdown 编辑", st.session_state.current_md_content, height=600)
-            st.session_state.current_md_content = new_content
+            st.warning("简易模式")
+            st.session_state.current_md_content = st.text_area("Markdown", st.session_state.current_md_content, height=600)
 
-    # -----------------------------------------------------
     # 阶段 3: 导出
-    # -----------------------------------------------------
     elif st.session_state.step == "generating":
         st.subheader("步骤 3/3: 导出文档")
-        
         paths = st.session_state.work_paths
         md_path = Path(paths["md"])
         output_dir = Path(paths["dir"])
         pdf_path = Path(paths["pdf"])
-        math_mode = st.session_state.get('math_mode', 'webtex')
+        math_mode = st.session_state.get('math_mode', 'mathml')
         
-        st.write("1. 保存最终修订内容...")
+        st.write("1. 保存内容...")
         FormatConverter.save_md_content(st.session_state.current_md_content, md_path)
         
         try:
-            st.write("2. 生成 Word 文档 (Markdown -> Docx)...")
+            st.write("2. 生成 Word...")
             docx_path = output_dir / f"{md_path.stem}.docx"
-            FormatConverter.run_pandoc(md_path, docx_path, "docx", math_mode=math_mode)
+            FormatConverter.run_pandoc(md_path, docx_path, "docx")
             
-            st.write(f"3. 生成 EPUB 电子书 (使用 {math_mode} 模式)...")
+            st.write(f"3. 生成 EPUB (模式: {math_mode})...")
             epub_path = output_dir / f"{md_path.stem}.epub"
-            FormatConverter.run_pandoc(
-                md_path, epub_path, "epub", 
-                source_filename=pdf_path.name,
-                math_mode=math_mode
-            )
+            FormatConverter.run_pandoc(md_path, epub_path, "epub", source_filename=pdf_path.name, math_mode=math_mode)
             
-            st.success("✅ 所有任务完成！")
-            
-            st.divider()
+            st.success("✅ 完成！")
             c1, c2, c3, c4 = st.columns(4)
-            
-            with open(docx_path, "rb") as f:
-                c1.download_button("📘 下载 Word", f, file_name=docx_path.name)
-            
-            with open(epub_path, "rb") as f:
-                c2.download_button("📗 下载 EPUB", f, file_name=epub_path.name)
-
-            with open(md_path, "rb") as f:
-                c3.download_button("📝 下载 Markdown", f, file_name=md_path.name)
-                
-            if c4.button("⬅️ 返回继续修改"):
+            with open(docx_path, "rb") as f: c1.download_button("📘 Word", f, file_name=docx_path.name)
+            with open(epub_path, "rb") as f: c2.download_button("📗 EPUB", f, file_name=epub_path.name)
+            with open(md_path, "rb") as f: c3.download_button("📝 Markdown", f, file_name=md_path.name)
+            if c4.button("⬅️ 返回修改"):
                 st.session_state.step = "editing"
                 st.rerun()
-                
         except Exception as e:
-            st.error(f"转换过程出错: {e}")
-            st.info("提示: 请检查是否已安装 pandoc (终端运行 `pandoc -v`)")
-            if st.button("重试"):
-                st.rerun()
+            st.error(f"错误: {e}")
+            if st.button("重试"): st.rerun()
 
 if __name__ == "__main__":
     main()
