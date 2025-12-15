@@ -19,19 +19,59 @@ class DocComparator:
             return None
 
     def _render_pdf_iframe(self, pdf_path):
-        """渲染 PDF iframe，高度拉满"""
-        b64_pdf = self.read_file_base64(pdf_path)
-        if b64_pdf:
-            return f'''
-                <iframe src="data:application/pdf;base64,{b64_pdf}" 
-                        width="100%" 
-                        height="900px" 
-                        type="application/pdf"
-                        style="border:1px solid #ddd; border-radius:5px;">
-                </iframe>
-            '''
-        return None
+            """渲染 PDF iframe，高度拉满"""
+            # 🟢 新增：大文件保护逻辑
+            try:
+                p = Path(pdf_path)
+                if not p.exists(): return None
+                
+                # 获取文件大小 (字节)
+                file_size = p.stat().st_size
+                # 设定阈值为 15MB (Base64编码后约20MB，这是大多数浏览器内嵌显示的舒适区上限)
+                limit_bytes = 15 * 1024 * 1024 
+                
+                if file_size > limit_bytes:
+                    return f'''
+                        <div style="
+                            width: 100%; 
+                            height: 900px; 
+                            display: flex; 
+                            flex-direction: column;
+                            justify-content: center; 
+                            align-items: center; 
+                            background-color: #f8f9fa;
+                            border: 1px solid #ddd; 
+                            border-radius: 5px;
+                            color: #555;
+                            text-align: center;
+                        ">
+                            <h3 style="margin-bottom: 10px;">⚠️ PDF 文件过大，已禁用预览</h3>
+                            <p style="margin: 5px 0;">当前文件大小: <b>{file_size / (1024 * 1024):.2f} MB</b></p>
+                            <p style="margin: 5px 0; font-size: 0.9em; color: #888;">
+                                浏览器无法稳定渲染超过 15MB 的内嵌 PDF。<br>
+                                强行渲染会导致页面卡死或崩溃。
+                            </p>
+                            <div style="margin-top: 20px; padding: 10px 20px; background: #e9ecef; border-radius: 4px;">
+                                👉 请使用本地 PDF 阅读器打开原文件进行对照
+                            </div>
+                        </div>
+                    '''
+            except Exception:
+                pass # 如果获取大小出错，尝试继续执行默认逻辑
 
+            # 🟢 原有逻辑：读取并转换为 Base64
+            b64_pdf = self.read_file_base64(pdf_path)
+            if b64_pdf:
+                return f'''
+                    <iframe src="data:application/pdf;base64,{b64_pdf}" 
+                            width="100%" 
+                            height="900px" 
+                            type="application/pdf"
+                            style="border:1px solid #ddd; border-radius:5px;">
+                    </iframe>
+                '''
+            return None
+        
     def _inject_images_for_preview(self, md_content, image_root):
         """
         核心功能：处理 Markdown 预览里的图片
