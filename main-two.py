@@ -13,6 +13,7 @@ from enum import Enum
 import threading
 from queue import Queue
 import concurrent.futures  # ⭐ 新增：并发库
+import converter_tool
 
 # 引入比对模块
 try:
@@ -481,7 +482,7 @@ def process_single_file_task(file_info, api_key_doc2x, api_key_mineru, force_ocr
 # ⭐ 修改：批量处理逻辑 (增加自动跳转)
 # =========================================================
 def process_batch_files(api_key_doc2x, api_key_mineru, force_ocr, math_mode):
-    """执行批量文件处理（多线程版）"""
+    """执行批量文件处理（单线程顺序版：上传完一个并处理好后，再处理下一个）"""
     manager = BatchFileManager()
     pending_files = manager.get_files_by_status(FileStatus.PENDING.value)
     
@@ -494,10 +495,11 @@ def process_batch_files(api_key_doc2x, api_key_mineru, force_ocr, math_mode):
     temp_dir = Path("./temp_uploads")
     temp_dir.mkdir(exist_ok=True)
     
-    # 在主线程保存文件
+    # 状态提示区域
     status_text = st.empty()
-    status_text.text("正在准备文件...")
+    status_text.info("正在准备文件...")
     
+    # 1. 准备工作：先将所有文件保存到本地临时目录，标记为处理中
     ready_files = []
     for file_info in pending_files:
         try:
@@ -506,6 +508,7 @@ def process_batch_files(api_key_doc2x, api_key_mineru, force_ocr, math_mode):
                 with open(pdf_path, "wb") as f:
                     f.write(file_info['file_obj'].getbuffer())
             ready_files.append(file_info)
+            # 先全部标记为“处理中”，避免用户以为还在等待
             manager.update_file_status(file_info['id'], FileStatus.PROCESSING.value)
         except Exception as e:
             manager.update_file_status(file_info['id'], FileStatus.FAILED.value, error_msg=f"文件读取失败: {e}")
@@ -516,34 +519,36 @@ def process_batch_files(api_key_doc2x, api_key_mineru, force_ocr, math_mode):
     # 进度条
     progress_bar = st.progress(0)
     total_files = len(ready_files)
-    completed_count = 0
     
-    # 开始多线程处理
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        future_to_file = {
-            executor.submit(
-                process_single_file_task, 
-                f, api_key_doc2x, api_key_mineru, force_ocr, math_mode, temp_dir
-            ): f 
-            for f in ready_files
-        }
+    # 2. 顺序循环处理
+    for i, file_info in enumerate(ready_files):
+        current_num = i + 1
+        filename = file_info['name']
         
-        status_text.text(f"🚀 正在并发处理 {total_files} 个文件...")
+        # 更新UI提示：显示当前正在处理哪一个
+        status_text.markdown(f"🚀 **正在处理 ({current_num}/{total_files})**: `{filename}` ...")
         
-        for future in concurrent.futures.as_completed(future_to_file):
-            file_id, res = future.result()
-            completed_count += 1
-            progress_bar.progress(completed_count / total_files)
-            
-            if res["success"]:
-                manager.update_file_status(file_id, FileStatus.COMPLETED.value, result_path=res["result_path"])
-            else:
-                manager.update_file_status(file_id, FileStatus.FAILED.value, error_msg=res["error"])
+        # --- 调用原本的单任务处理函数 (直接在主线程运行) ---
+        # 注意：这里会阻塞，直到该文件上传、解析、转换全部完成
+        file_id, res = process_single_file_task(
+            file_info, api_key_doc2x, api_key_mineru, force_ocr, math_mode, temp_dir
+        )
+        
+        # 更新单个文件的状态
+        if res["success"]:
+            manager.update_file_status(file_id, FileStatus.COMPLETED.value, result_path=res["result_path"])
+        else:
+            manager.update_file_status(file_id, FileStatus.FAILED.value, error_msg=res["error"])
+        
+        # 更新总进度条
+        progress_bar.progress(current_num / total_files)
     
-    status_text.success("🎉 批量处理完成！")
-    time.sleep(1) 
+    # 全部完成后的收尾
+    status_text.success("🎉 所有文件处理完成！")
+    progress_bar.progress(1.0)
+    time.sleep(1.5) 
     
-    # ⭐ 核心修改：处理完成后自动跳转到“已完成”标签
+    # 自动跳转到“已完成”标签
     st.session_state.batch_processing = False
     st.session_state.batch_active_tab = "✅ 已完成" 
     st.rerun()
@@ -731,8 +736,23 @@ def main():
         if st.button("🔄 重置"):
             st.session_state.clear()
             st.rerun()
+        # 👇👇👇 新增：格式转换工具箱 👇👇👇
+        st.markdown("### 🛠️ 格式工具箱")
+        
+        # 按钮 1: Word/MD 转 Epub
+        if st.button("📘 Word/MD 转 Epub", use_container_width=True):
+            st.session_state.work_mode = "converter"
+            st.session_state.converter_mode = "to_epub" # 记录具体模式
+            st.rerun()
+            
+        # 按钮 2: Epub 转 Markdown
+        if st.button("📗 Epub 转 Markdown", use_container_width=True):
+            st.session_state.work_mode = "converter"
+            st.session_state.converter_mode = "to_md"   # 记录具体模式
+            st.rerun()
 
-    # 模式选择
+
+    # 📌 修改：模式选择区域，增加格式转换按钮
     c1, c2 = st.columns(2)
     with c1:
         if st.button("📄 单文件处理", type="primary" if st.session_state.work_mode == "single" else "secondary", use_container_width=True):
@@ -742,17 +762,24 @@ def main():
         if st.button("📦 批量处理", type="primary" if st.session_state.work_mode == "batch" else "secondary", use_container_width=True):
             st.session_state.work_mode = "batch"
             st.rerun()
-    
+     
     st.divider()
 
-    # 路由
+    # 📌 修改：路由逻辑
     if st.session_state.work_mode == "batch":
         if st.session_state.batch_processing:
             process_batch_files(api_key_doc2x, api_key_mineru, force_ocr, math_mode)
         else:
             render_batch_processing_ui()
-# ========== 单文件处理模式 ==========
+
+    elif st.session_state.work_mode == "converter":
+        # 获取具体的子模式，默认为 to_epub
+        mode = st.session_state.get("converter_mode", "to_epub")
+        converter_tool.render_converter_ui(mode) # 👈 传入 mode
+
     else:
+        # ... (这里是原有的单文件处理逻辑: if step == "upload" ...)
+        # 保持原有的单文件处理代码不变
         # 阶段 1: 上传
         if st.session_state.step == "upload":
             st.info("步骤 1/3: 上传 PDF 进行智能解析")
